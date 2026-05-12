@@ -46,5 +46,5 @@
       delegate_to: localhost
       ansible.builtin.copy:
         content: "{{ cmdb_html.stdout }}"
-        dest: "/dashboard/fleet_dashboard.html"
+        dest: "/dashboard/index.html"
       become: no
