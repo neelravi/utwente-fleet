@@ -37,7 +37,7 @@
     - name: Generate the HTML Dashboard
       run_once: true
       delegate_to: localhost
-      ansible.builtin.command: ansible-cmdb /tmp/fleet_facts
+      ansible.builtin.command: ansible-cmdb -i {{ inventory_file }} /tmp/fleet_facts
       register: cmdb_html
       become: no
 
