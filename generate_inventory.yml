@@ -2,7 +2,7 @@
 - name: Generate Fleet Hardware Dashboard
   hosts: all
   become: yes
-  gather_facts: yes
+  gather_facts: no  # <-- Turn off automatic background gathering
 
   tasks:
     - name: Create a temporary directory on Semaphore to store raw facts
@@ -13,10 +13,14 @@
         state: directory
       become: no
 
-    - name: Save each server's hardware facts into the directory
+    - name: Gather full hardware facts explicitly in raw format
+      ansible.builtin.setup:
+      register: raw_facts   # <-- Capture the raw, unformatted data here
+
+    - name: Save each server's raw facts into the directory
       delegate_to: localhost
       ansible.builtin.copy:
-        content: "{{ {'ansible_facts': ansible_facts} | to_json }}"
+        content: "{{ raw_facts | to_json }}"
         dest: "/tmp/fleet_facts/{{ inventory_hostname }}"
       become: no
 
