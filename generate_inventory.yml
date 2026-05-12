@@ -20,11 +20,13 @@
         dest: "/tmp/fleet_facts/{{ inventory_hostname }}"
       become: no
 
-    - name: Install ansible-cmdb inside the Semaphore container
+    - name: Install ansible-cmdb and Python 3.12 patch inside the Semaphore container
       run_once: true
       delegate_to: localhost
       ansible.builtin.pip:
-        name: ansible-cmdb
+        name: 
+          - ansible-cmdb
+          - zombie-imp
         extra_args: "--break-system-packages"
       become: no
 
