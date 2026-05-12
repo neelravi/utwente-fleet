@@ -16,7 +16,6 @@
     - name: Save each server's hardware facts into the directory
       delegate_to: localhost
       ansible.builtin.copy:
-        # ansible-cmdb expects a specific JSON structure, which we build here
         content: "{{ {'ansible_facts': ansible_facts} | to_json }}"
         dest: "/tmp/fleet_facts/{{ inventory_hostname }}"
       become: no
@@ -36,11 +35,10 @@
       register: cmdb_html
       become: no
 
-    - name: Push the finished Dashboard to ccpdesk002 for viewing
+    - name: Save the finished Dashboard to the shared Mac folder
       run_once: true
-      delegate_to: ccpdesk002
+      delegate_to: localhost
       ansible.builtin.copy:
         content: "{{ cmdb_html.stdout }}"
-        dest: "/home/ravindra/fleet_dashboard.html"
-        owner: ravindra
-        mode: '0644'
+        dest: "/dashboard/fleet_dashboard.html"
+      become: no
