@@ -99,7 +99,25 @@
         cp -r {{ cmdb_tpl_dir.stdout | trim }} /tmp/cmdb_custom_tpl
       become: no
 
-    # ── Patch the template to add custom columns to the Host Overview ─────────
+    # ── DEBUG: Inspect template structure (remove after fix is confirmed) ─────
+    - name: DEBUG - Show column definition structure in template
+      run_once: true
+      delegate_to: localhost
+      ansible.builtin.shell: |
+        echo "=== Lines containing 'col' or 'render' or 'var ' or '];' ==="
+        grep -n "col\|render\|var \|\];" /tmp/cmdb_custom_tpl/html_fancy_defs.html | head -60
+        echo "=== Last 40 lines of file ==="
+        tail -40 /tmp/cmdb_custom_tpl/html_fancy_defs.html
+      become: no
+      register: debug_tpl
+    - name: DEBUG - Print template inspection
+      run_once: true
+      delegate_to: localhost
+      ansible.builtin.debug:
+        msg: "{{ debug_tpl.stdout_lines }}"
+      become: no
+
+
     - name: Patch template to add custom columns to Host Overview
       run_once: true
       delegate_to: localhost
