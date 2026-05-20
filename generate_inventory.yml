@@ -181,8 +181,7 @@
       delegate_to: localhost
       ansible.builtin.command: >
         ansible-cmdb
-        -p /tmp/cmdb_custom_tpl
-        -t html_fancy
+        -t /tmp/cmdb_custom_tpl/html_fancy.tpl
         -i {{ inventory_file }}
         /tmp/fleet_facts
       register: cmdb_html
