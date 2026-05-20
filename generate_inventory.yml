@@ -105,11 +105,16 @@
       delegate_to: localhost
       ansible.builtin.shell: |
         python3 << 'PYEOF'
-        import os, re
+        import re
 
         tpl_path = "/tmp/cmdb_custom_tpl/html_fancy_defs.html"
         with open(tpl_path, "r") as f:
             content = f.read()
+
+        # Guard: skip if already patched
+        if "screens_connected" in content:
+            print("Template already patched OK")
+            exit(0)
 
         new_cols = """
             {
@@ -150,13 +155,24 @@
             },
         """
 
-        # Insert just before the closing ]; of the cols array
-        patched = re.sub(
-            r'(\];(\s*</script>|\s*%>))',
-            new_cols + r'\1',
+        # Target the var cols = [ ... ]; block using DOTALL so it spans
+        # multiple lines. Insert new_cols just before the closing ];
+        patched, n = re.subn(
+            r'(var cols\s*=\s*\[)(.*?)(\];)',
+            lambda m: m.group(1) + m.group(2) + new_cols + m.group(3),
             content,
-            count=1
+            count=1,
+            flags=re.DOTALL
         )
+
+        if n == 0:
+            print("ERROR: Could not find 'var cols = [' in template")
+            exit(1)
+
+        # Verify injection landed
+        if "screens_connected" not in patched:
+            print("ERROR: Injection check failed after substitution")
+            exit(1)
 
         with open(tpl_path, "w") as f:
             f.write(patched)
