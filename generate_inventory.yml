@@ -91,28 +91,28 @@
               "title": "Screens",
               "id": "screens",
               "sType": "num",
-              "visible": true,
+              "visible": True,
               "jsonxs": "ansible_facts.ansible_local.custom_metrics.screens_connected"
             },
             {
               "title": "Total storage",
               "id": "total_storage",
               "sType": "string",
-              "visible": true,
+              "visible": True,
               "jsonxs": "ansible_facts.ansible_local.custom_metrics.total_storage"
             },
             {
               "title": "Used storage",
               "id": "used_storage",
               "sType": "string",
-              "visible": true,
+              "visible": True,
               "jsonxs": "ansible_facts.ansible_local.custom_metrics.used_storage"
             },
             {
               "title": "Free storage",
               "id": "free_storage",
               "sType": "string",
-              "visible": true,
+              "visible": True,
               "jsonxs": "ansible_facts.ansible_local.custom_metrics.free_storage"
             }
           ]
