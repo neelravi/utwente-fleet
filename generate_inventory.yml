@@ -78,110 +78,54 @@
         extra_args: "--break-system-packages"
       become: no
 
-    # ── Locate the ansible-cmdb template directory ───────────────────────────
-    - name: Find ansible-cmdb template directory
+    # ── Create custom column definitions for ansible-cmdb ─────────────────────
+    # Uses the built-in --cust-cols feature instead of template patching.
+    # The "jsonxs" key tells ansible-cmdb the dot-path into the host data.
+    - name: Create custom column definitions file
       run_once: true
       delegate_to: localhost
-      ansible.builtin.shell: |
-        python3 -c "
-        import ansiblecmdb, os
-        print(os.path.join(os.path.dirname(ansiblecmdb.__file__), 'data', 'tpl'))
-        "
-      register: cmdb_tpl_dir
+      ansible.builtin.copy:
+        content: |
+          [
+            {
+              "title": "Screens",
+              "id": "screens",
+              "sType": "num",
+              "visible": true,
+              "jsonxs": "ansible_facts.ansible_local.custom_metrics.screens_connected"
+            },
+            {
+              "title": "Total storage",
+              "id": "total_storage",
+              "sType": "string",
+              "visible": true,
+              "jsonxs": "ansible_facts.ansible_local.custom_metrics.total_storage"
+            },
+            {
+              "title": "Used storage",
+              "id": "used_storage",
+              "sType": "string",
+              "visible": true,
+              "jsonxs": "ansible_facts.ansible_local.custom_metrics.used_storage"
+            },
+            {
+              "title": "Free storage",
+              "id": "free_storage",
+              "sType": "string",
+              "visible": true,
+              "jsonxs": "ansible_facts.ansible_local.custom_metrics.free_storage"
+            }
+          ]
+        dest: /tmp/fleet_cust_cols.json
       become: no
 
-    # ── Copy the built-in template so we can patch it safely ─────────────────
-    - name: Copy ansible-cmdb template for patching
-      run_once: true
-      delegate_to: localhost
-      ansible.builtin.shell: |
-        rm -rf /tmp/cmdb_custom_tpl
-        cp -r {{ cmdb_tpl_dir.stdout | trim }} /tmp/cmdb_custom_tpl
-      become: no
-
-    # ── Patch the template to add custom columns to the Host Overview ─────────
-    # The template is a Mako/Python file. Columns are Python dicts with a
-    # "func" key pointing to a Python callable. We must:
-    #   1. Define helper functions before "cols = ["
-    #   2. Add column dicts after the last built-in column (prodserial)
-    - name: Patch template to add custom columns to Host Overview
-      run_once: true
-      delegate_to: localhost
-      ansible.builtin.shell: |
-        python3 << 'PYEOF'
-        tpl_path = "/tmp/cmdb_custom_tpl/html_fancy_defs.html"
-        with open(tpl_path, "r") as f:
-            content = f.read()
-
-        # Guard: skip if already patched
-        if "screens_connected" in content:
-            print("Template already patched OK")
-            exit(0)
-
-        # ── Step 1: define helper functions before "  cols = [" ───────────────
-        func_defs = (
-            "  def col_screens_connected(host):\n"
-            "      try:    return str(host['ansible_facts']['ansible_local']['custom_metrics']['screens_connected'])\n"
-            "      except: return ''\n"
-            "\n"
-            "  def col_total_storage(host):\n"
-            "      try:    return str(host['ansible_facts']['ansible_local']['custom_metrics']['total_storage'])\n"
-            "      except: return ''\n"
-            "\n"
-            "  def col_used_storage(host):\n"
-            "      try:    return str(host['ansible_facts']['ansible_local']['custom_metrics']['used_storage'])\n"
-            "      except: return ''\n"
-            "\n"
-            "  def col_free_storage(host):\n"
-            "      try:    return str(host['ansible_facts']['ansible_local']['custom_metrics']['free_storage'])\n"
-            "      except: return ''\n"
-            "\n"
-        )
-
-        anchor_open = "  cols = ["
-        if anchor_open not in content:
-            print("ERROR: Could not find '  cols = [' in template")
-            exit(1)
-
-        patched = content.replace(anchor_open, func_defs + anchor_open, 1)
-
-        # ── Step 2: insert column dicts after the last built-in entry ─────────
-        anchor_last = '    {"title": "Product Serial","id": "prodserial",    "func": col_prodserial,     "sType": "string", "visible": False},'
-        if anchor_last not in patched:
-            print("ERROR: Could not find prodserial anchor in template")
-            exit(1)
-
-        new_cols = (
-            anchor_last + "\n"
-            '    {"title": "Screens",       "id": "screens",       "func": col_screens_connected, "sType": "num",    "visible": False},\n'
-            '    {"title": "Total storage", "id": "total_storage", "func": col_total_storage,      "sType": "string", "visible": False},\n'
-            '    {"title": "Used storage",  "id": "used_storage",  "func": col_used_storage,       "sType": "string", "visible": False},\n'
-            '    {"title": "Free storage",  "id": "free_storage",  "func": col_free_storage,       "sType": "string", "visible": False},'
-        )
-
-        patched = patched.replace(anchor_last, new_cols, 1)
-
-        # ── Verify both injections landed ─────────────────────────────────────
-        if "screens_connected" not in patched:
-            print("ERROR: Injection verification failed")
-            exit(1)
-
-        with open(tpl_path, "w") as f:
-            f.write(patched)
-
-        print("Template patched OK")
-        PYEOF
-      register: patch_result
-      failed_when: "'OK' not in patch_result.stdout"
-      become: no
-
-    # ── Generate the HTML dashboard using the patched template ────────────────
+    # ── Generate the HTML dashboard ───────────────────────────────────────────
     - name: Generate the HTML Dashboard
       run_once: true
       delegate_to: localhost
       ansible.builtin.command: >
         ansible-cmdb
-        -t /tmp/cmdb_custom_tpl/html_fancy.tpl
+        --cust-cols /tmp/fleet_cust_cols.json
         -i {{ inventory_file }}
         /tmp/fleet_facts
       register: cmdb_html
