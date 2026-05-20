@@ -2,9 +2,9 @@
 - name: Generate Fleet Hardware Dashboard
   hosts: all
   become: yes
-  gather_facts: no  # <-- Turn off automatic background gathering
-
+  gather_facts: no
   tasks:
+
     - name: Create a temporary directory on Semaphore to store raw facts
       run_once: true
       delegate_to: localhost
@@ -15,12 +15,50 @@
 
     - name: Gather full hardware facts explicitly in raw format
       ansible.builtin.setup:
-      register: raw_facts   # <-- Capture the raw, unformatted data here
+      register: raw_facts
 
-    - name: Save each server's raw facts into the directory
+    # ── NEW: Count connected screens via DRM (no X11/DISPLAY needed) ──────────
+    - name: Count connected screens
+      ansible.builtin.shell: |
+        cat /sys/class/drm/*/status 2>/dev/null | grep -c "^connected" || echo 0
+      register: screen_count
+      changed_when: false
+
+    # ── NEW: Total and used storage (excludes tmpfs, devtmpfs, squashfs) ───────
+    - name: Get total and used storage in GB
+      ansible.builtin.shell: |
+        df -BG --total \
+          --exclude-type=tmpfs \
+          --exclude-type=devtmpfs \
+          --exclude-type=squashfs \
+          --exclude-type=overlay 2>/dev/null \
+        | awk 'END{gsub("G","",$2); gsub("G","",$3); print $2, $3}'
+      register: storage_info
+      changed_when: false
+
+    # ── NEW: Merge custom facts into the fact blob ────────────────────────────
+    - name: Merge custom metrics into facts
+      ansible.builtin.set_fact:
+        combined_facts: >-
+          {{
+            raw_facts |
+            combine({
+              'ansible_facts': raw_facts.ansible_facts | combine({
+                'ansible_local': {
+                  'custom_metrics': {
+                    'screens_connected': screen_count.stdout | trim | int,
+                    'total_storage_gb':  storage_info.stdout.split()[0] | int,
+                    'used_storage_gb':   storage_info.stdout.split()[1] | int
+                  }
+                }
+              })
+            })
+          }}
+
+    - name: Save each server's facts (with custom metrics) into the directory
       delegate_to: localhost
       ansible.builtin.copy:
-        content: "{{ raw_facts | to_json }}"
+        content: "{{ combined_facts | to_json }}"
         dest: "/tmp/fleet_facts/{{ inventory_hostname }}"
       become: no
 
@@ -28,7 +66,7 @@
       run_once: true
       delegate_to: localhost
       ansible.builtin.pip:
-        name: 
+        name:
           - ansible-cmdb
           - zombie-imp
         extra_args: "--break-system-packages"
