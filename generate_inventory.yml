@@ -2,9 +2,11 @@
 - name: Generate Fleet Hardware Dashboard
   hosts: all
   become: yes
-  gather_facts: no
+  gather_facts: no  # Turn off automatic background gathering
+
   tasks:
 
+    # ── Semaphore working directory ───────────────────────────────────────────
     - name: Create a temporary directory on Semaphore to store raw facts
       run_once: true
       delegate_to: localhost
@@ -13,18 +15,19 @@
         state: directory
       become: no
 
+    # ── Gather standard Ansible facts ────────────────────────────────────────
     - name: Gather full hardware facts explicitly in raw format
       ansible.builtin.setup:
       register: raw_facts
 
-    # ── NEW: Count connected screens via DRM (no X11/DISPLAY needed) ──────────
+    # ── Count connected screens via DRM (no X11/DISPLAY needed) ──────────────
     - name: Count connected screens
       ansible.builtin.shell: |
         cat /sys/class/drm/*/status 2>/dev/null | grep -c "^connected" || echo 0
       register: screen_count
       changed_when: false
 
-    # ── NEW: Total and used storage (excludes tmpfs, devtmpfs, squashfs) ───────
+    # ── Total and used storage (excludes pseudo-filesystems) ─────────────────
     - name: Get total and used storage in GB
       ansible.builtin.shell: |
         df -BG --total \
@@ -36,7 +39,7 @@
       register: storage_info
       changed_when: false
 
-    # ── NEW: Merge custom facts into the fact blob ────────────────────────────
+    # ── Merge custom metrics into the fact blob ───────────────────────────────
     - name: Merge custom metrics into facts
       ansible.builtin.set_fact:
         combined_facts: >-
@@ -47,14 +50,16 @@
                 'ansible_local': {
                   'custom_metrics': {
                     'screens_connected': screen_count.stdout | trim | int,
-                    'total_storage_gb':  storage_info.stdout.split()[0] | int,
-                    'used_storage_gb':   storage_info.stdout.split()[1] | int
+                    'total_storage':     (storage_info.stdout.split()[0] | int) | string + ' GB',
+                    'used_storage':      (storage_info.stdout.split()[1] | int) | string + ' GB',
+                    'free_storage':      ((storage_info.stdout.split()[0] | int) - (storage_info.stdout.split()[1] | int)) | string + ' GB'
                   }
                 }
               })
             })
           }}
 
+    # ── Save per-host facts (including custom metrics) ────────────────────────
     - name: Save each server's facts (with custom metrics) into the directory
       delegate_to: localhost
       ansible.builtin.copy:
@@ -62,6 +67,7 @@
         dest: "/tmp/fleet_facts/{{ inventory_hostname }}"
       become: no
 
+    # ── Install ansible-cmdb inside Semaphore container ──────────────────────
     - name: Install ansible-cmdb and Python 3.12 patch inside the Semaphore container
       run_once: true
       delegate_to: localhost
@@ -72,13 +78,116 @@
         extra_args: "--break-system-packages"
       become: no
 
+    # ── Locate the ansible-cmdb template directory ───────────────────────────
+    - name: Find ansible-cmdb template directory
+      run_once: true
+      delegate_to: localhost
+      ansible.builtin.shell: |
+        python3 -c "
+        import ansiblecmdb, os
+        print(os.path.join(os.path.dirname(ansiblecmdb.__file__), 'data', 'tpl'))
+        "
+      register: cmdb_tpl_dir
+      become: no
+
+    # ── Copy the built-in template so we can patch it safely ─────────────────
+    - name: Copy ansible-cmdb template for patching
+      run_once: true
+      delegate_to: localhost
+      ansible.builtin.shell: |
+        rm -rf /tmp/cmdb_custom_tpl
+        cp -r {{ cmdb_tpl_dir.stdout | trim }} /tmp/cmdb_custom_tpl
+      become: no
+
+    # ── Patch the template to add custom columns to the Host Overview ─────────
+    - name: Patch template to add custom columns to Host Overview
+      run_once: true
+      delegate_to: localhost
+      ansible.builtin.shell: |
+        python3 << 'PYEOF'
+        import os, re
+
+        tpl_path = "/tmp/cmdb_custom_tpl/html_fancy_defs.html"
+        with open(tpl_path, "r") as f:
+            content = f.read()
+
+        new_cols = """
+            {
+                id: 'screens_connected',
+                title: 'Screens',
+                col: 'screens_connected',
+                render: function(host) {
+                    try { return host['ansible_local']['custom_metrics']['screens_connected']; }
+                    catch(e) { return ''; }
+                }
+            },
+            {
+                id: 'total_storage',
+                title: 'Total storage',
+                col: 'total_storage',
+                render: function(host) {
+                    try { return host['ansible_local']['custom_metrics']['total_storage']; }
+                    catch(e) { return ''; }
+                }
+            },
+            {
+                id: 'used_storage',
+                title: 'Used storage',
+                col: 'used_storage',
+                render: function(host) {
+                    try { return host['ansible_local']['custom_metrics']['used_storage']; }
+                    catch(e) { return ''; }
+                }
+            },
+            {
+                id: 'free_storage',
+                title: 'Free storage',
+                col: 'free_storage',
+                render: function(host) {
+                    try { return host['ansible_local']['custom_metrics']['free_storage']; }
+                    catch(e) { return ''; }
+                }
+            },
+        """
+
+        # Insert just before the closing ]; of the cols array
+        patched = re.sub(
+            r'(\];(\s*</script>|\s*%>))',
+            new_cols + r'\1',
+            content,
+            count=1
+        )
+
+        with open(tpl_path, "w") as f:
+            f.write(patched)
+
+        print("Template patched OK")
+        PYEOF
+      register: patch_result
+      failed_when: "'OK' not in patch_result.stdout"
+      become: no
+
+    # ── Debug helper: uncomment if the patch step fails ──────────────────────
+    # - name: Debug template tail (use if patch fails)
+    #   run_once: true
+    #   delegate_to: localhost
+    #   ansible.builtin.shell: >
+    #     grep -n "cols\|columnDefs\|\];" /tmp/cmdb_custom_tpl/html_fancy_defs.html | tail -20
+    #   become: no
+
+    # ── Generate the HTML dashboard using the patched template ────────────────
     - name: Generate the HTML Dashboard
       run_once: true
       delegate_to: localhost
-      ansible.builtin.command: ansible-cmdb -i {{ inventory_file }} /tmp/fleet_facts
+      ansible.builtin.command: >
+        ansible-cmdb
+        -t /tmp/cmdb_custom_tpl
+        -i {{ inventory_file }}
+        /tmp/fleet_facts
       register: cmdb_html
       become: no
 
+    # ── Write the finished dashboard to the shared Mac folder ────────────────
     - name: Save the finished Dashboard to the shared Mac folder
       run_once: true
       delegate_to: localhost
