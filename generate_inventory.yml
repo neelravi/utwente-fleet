@@ -23,22 +23,30 @@
       ansible.builtin.setup:
       register: raw_facts
 
-    # ── Count connected screens via DRM (no X11/DISPLAY needed) ──────────────
+# ── Count connected screens (cross-platform) ────────────────────────────
     - name: Count connected screens
       ansible.builtin.shell: |
-        cat /sys/class/drm/*/status 2>/dev/null | grep -c "^connected" || echo 0
+        if [ "$(uname)" = "Darwin" ]; then
+          system_profiler SPDisplaysDataType 2>/dev/null | grep -c "Resolution:" || echo 0
+        else
+          cat /sys/class/drm/*/status 2>/dev/null | grep -c "^connected" || echo 0
+        fi
       register: screen_count
       changed_when: false
 
-    # ── Total and used storage (excludes pseudo-filesystems) ─────────────────
+    # ── Total and used storage in GB (cross-platform) ────────────────────────
     - name: Get total and used storage in GB
       ansible.builtin.shell: |
-        df -BG --total \
-          --exclude-type=tmpfs \
-          --exclude-type=devtmpfs \
-          --exclude-type=squashfs \
-          --exclude-type=overlay 2>/dev/null \
-        | awk 'END{gsub("G","",$2); gsub("G","",$3); print $2, $3}'
+        if [ "$(uname)" = "Darwin" ]; then
+          df -g / | awk 'NR==2 {print $2, $3}'
+        else
+          df -BG --total \
+            --exclude-type=tmpfs \
+            --exclude-type=devtmpfs \
+            --exclude-type=squashfs \
+            --exclude-type=overlay 2>/dev/null \
+          | awk 'END{gsub("G","",$2); gsub("G","",$3); print $2, $3}'
+        fi
       register: storage_info
       changed_when: false
 
