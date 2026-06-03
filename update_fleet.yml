@@ -1,11 +1,19 @@
 ---
 - name: Check Available Updates
   hosts: all
-  become: yes 
+  become: yes
+  ignore_unreachable: yes   # Offline hosts are skipped, not treated as failures
   gather_facts: yes
-  
+
   tasks:
     - name: Update apt cache (sudo apt update)
       ansible.builtin.apt:
         update_cache: yes
-      when: ansible_facts['os_family'] == "Debian"
+      # Null-safe: an offline host has no gathered facts, so os_family is
+      # undefined -> defaults to '' -> task is skipped instead of erroring.
+      when: ansible_facts.os_family | default('') == "Debian"
+      # If 'apt update' itself fails on a reachable host (bad repo, GPG error,
+      # transient network), don't fail the whole run. Ansible marks the task
+      # failed but ignores it ("...ignoring"); the recap counts it under
+      # 'ignored', so the report stays green while the failure remains visible.
+      ignore_errors: yes
