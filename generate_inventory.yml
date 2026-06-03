@@ -2,20 +2,44 @@
 - name: Generate Fleet Hardware Dashboard
   hosts: all
   become: yes
+  ignore_unreachable: yes   # Offline hosts are skipped, not treated as failures
   gather_facts: no  # Turn off automatic background gathering
 
   tasks:
 
     # ── Semaphore working directory ───────────────────────────────────────────
-    - name: Create a temporary directory on Semaphore to store raw facts
+    # NOTE: We deliberately do NOT wipe the whole directory anymore. A blanket
+    # wipe would also delete the last good report of any host that is currently
+    # offline. Instead we keep the directory, let reachable hosts overwrite
+    # their own fact file below, and only prune fact files belonging to hosts
+    # that are no longer in the inventory (the original "ghost entry" problem).
+    - name: Ensure the facts directory exists (preserve existing reports)
       run_once: true
       delegate_to: localhost
       ansible.builtin.file:
         path: /tmp/fleet_facts
-        state: "{{ item }}"
-      loop:
-        - absent
-        - directory
+        state: directory
+      become: no
+
+    - name: Find existing fact files
+      run_once: true
+      delegate_to: localhost
+      ansible.builtin.find:
+        paths: /tmp/fleet_facts
+        file_type: file
+      register: existing_fact_files
+      become: no
+
+    - name: Prune only stale fact files for hosts no longer in inventory (ghosts)
+      run_once: true
+      delegate_to: localhost
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ existing_fact_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      when: (item.path | basename) not in ansible_play_hosts_all
       become: no
 
     # ── Gather standard Ansible facts ────────────────────────────────────────
@@ -33,6 +57,7 @@
         fi
       register: screen_count
       changed_when: false
+      when: raw_facts is not unreachable
 
     # ── Total and used storage in GB (cross-platform) ────────────────────────
     - name: Get total and used storage in GB
@@ -49,6 +74,7 @@
         fi
       register: storage_info
       changed_when: false
+      when: raw_facts is not unreachable
 
     # ── Merge custom metrics into the fact blob ───────────────────────────────
     - name: Merge custom metrics into facts
@@ -69,6 +95,7 @@
               })
             })
           }}
+      when: raw_facts is not unreachable
 
     # ── Save per-host facts (including custom metrics) ────────────────────────
     - name: Save each server's facts (with custom metrics) into the directory
@@ -77,6 +104,7 @@
         content: "{{ combined_facts | to_json }}"
         dest: "/tmp/fleet_facts/{{ inventory_hostname }}"
       become: no
+      when: raw_facts is not unreachable
 
     # ── Install ansible-cmdb inside Semaphore container ──────────────────────
     - name: Install ansible-cmdb and Python 3.12 patch inside the Semaphore container
